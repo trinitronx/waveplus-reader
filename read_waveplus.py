@@ -31,6 +31,8 @@ import sys
 import time
 import struct
 import tableprint
+import os
+import graphyte
 
 # ===============================
 # Script guards for correct usage
@@ -63,7 +65,7 @@ if sys.argv[2].isdigit() is not True or int(sys.argv[2])<0:
 if len(sys.argv) > 3:
     Mode = sys.argv[3].lower()
 else:
-    Mode = 'terminal' # (default) print to terminal 
+    Mode = 'terminal' # (default) print to terminal
 
 if Mode!='pipe' and Mode!='terminal':
     print("ERROR: Invalid piping method.")
@@ -101,8 +103,8 @@ def parseSerialNumber(ManuDataHexStr):
 
 class WavePlus():
 
-    
-    
+
+
     def __init__(self, SerialNumber):
         self.periph        = None
         self.curr_val_char = None
@@ -124,30 +126,30 @@ class WavePlus():
                     if (SN == self.SN):
                         self.MacAddr = dev.addr # exits the while loop on next conditional check
                         break # exit for loop
-            
+
             if (self.MacAddr is None):
                 print("ERROR: Could not find device.")
                 print("GUIDE: (1) Please verify the serial number.")
                 print("       (2) Ensure that the device is advertising.")
                 print("       (3) Retry connection.")
                 sys.exit(1)
-        
+
         # Connect to device
         if (self.periph is None):
             self.periph = Peripheral(self.MacAddr)
         if (self.curr_val_char is None):
             self.curr_val_char = self.periph.getCharacteristics(uuid=self.uuid)[0]
-        
+
     def read(self):
         if (self.curr_val_char is None):
             print("ERROR: Devices are not connected.")
-            sys.exit(1)            
+            sys.exit(1)
         rawdata = self.curr_val_char.read()
         rawdata = struct.unpack('BBBBHHHHHHHH', rawdata)
         sensors = Sensors()
         sensors.set(rawdata)
         return sensors
-    
+
     def disconnect(self):
         if self.periph is not None:
             self.periph.disconnect()
@@ -172,7 +174,7 @@ class Sensors():
         self.sensor_version = None
         self.sensor_data    = [None]*NUMBER_OF_SENSORS
         self.sensor_units   = ["%rH", "Bq/m3", "Bq/m3", "degC", "hPa", "ppm", "ppb"]
-    
+
     def set(self, rawData):
         self.sensor_version = rawData[0]
         if (self.sensor_version == 1):
@@ -187,7 +189,7 @@ class Sensors():
             print("ERROR: Unknown sensor version.\n")
             print("GUIDE: Contact Airthings for support.\n")
             sys.exit(1)
-   
+
     def conv2radon(self, radon_raw):
         radon = "N/A" # Either invalid measurement, or not available
         if 0 <= radon_raw <= 16383:
@@ -203,26 +205,28 @@ class Sensors():
 try:
     #---- Initialize ----#
     waveplus = WavePlus(SerialNumber)
-    
+    if os.environ.get('GRAPHITE_ENABLED'):
+        graphyte.init(os.getenv('GRAPHITE_HOST', 'graphite'), prefix='app.airthings.waveplus')
+
     if (Mode=='terminal'):
         print("\nPress ctrl+C to exit program\n")
-    
+
     print("Device serial number: %s" %(SerialNumber))
-    
+
     header = ['Humidity', 'Radon ST avg', 'Radon LT avg', 'Temperature', 'Pressure', 'CO2 level', 'VOC level']
-    
+
     if (Mode=='terminal'):
         print(tableprint.header(header, width=12))
     elif (Mode=='pipe'):
         print(header)
-        
+
     while True:
-        
+
         waveplus.connect()
-        
+
         # read values
         sensors = waveplus.read()
-        
+
         # extract
         humidity     = str(sensors.getValue(SENSOR_IDX_HUMIDITY))             + " " + str(sensors.getUnit(SENSOR_IDX_HUMIDITY))
         radon_st_avg = str(sensors.getValue(SENSOR_IDX_RADON_SHORT_TERM_AVG)) + " " + str(sensors.getUnit(SENSOR_IDX_RADON_SHORT_TERM_AVG))
@@ -231,18 +235,28 @@ try:
         pressure     = str(sensors.getValue(SENSOR_IDX_REL_ATM_PRESSURE))     + " " + str(sensors.getUnit(SENSOR_IDX_REL_ATM_PRESSURE))
         CO2_lvl      = str(sensors.getValue(SENSOR_IDX_CO2_LVL))              + " " + str(sensors.getUnit(SENSOR_IDX_CO2_LVL))
         VOC_lvl      = str(sensors.getValue(SENSOR_IDX_VOC_LVL))              + " " + str(sensors.getUnit(SENSOR_IDX_VOC_LVL))
-        
+
         # Print data
         data = [humidity, radon_st_avg, radon_lt_avg, temperature, pressure, CO2_lvl, VOC_lvl]
-        
+
+        if os.environ.get('GRAPHITE_ENABLED'):
+            # Send metrics to Graphite
+            graphyte.send('humidity', sensors.getValue(SENSOR_IDX_HUMIDITY))
+            graphyte.send('radon_st_avg', sensors.getValue(SENSOR_IDX_RADON_SHORT_TERM_AVG))
+            graphyte.send('radon_lt_avg', sensors.getValue(SENSOR_IDX_RADON_LONG_TERM_AVG))
+            graphyte.send('temperature',  sensors.getValue(SENSOR_IDX_TEMPERATURE))
+            graphyte.send('pressure', sensors.getValue(SENSOR_IDX_REL_ATM_PRESSURE))
+            graphyte.send('CO2_lvl', sensors.getValue(SENSOR_IDX_CO2_LVL))
+            graphyte.send('VOC_lvl', sensors.getValue(SENSOR_IDX_VOC_LVL))
+
         if (Mode=='terminal'):
             print(tableprint.row(data, width=12))
         elif (Mode=='pipe'):
             print(data)
-        
+
         waveplus.disconnect()
-        
+
         time.sleep(SamplePeriod)
-            
+
 finally:
     waveplus.disconnect()

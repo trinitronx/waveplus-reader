@@ -37,7 +37,7 @@ RUN set -ex; \
 		\) -exec rm -rf '{}' +; \
 	rm -f get-pip.py
 
-RUN pip3 install tableprint==0.8.0 bluepy -i https://www.piwheels.hostedpi.com/simple
+RUN pip3 install tableprint==0.8.0 bluepy graphyte -i https://www.piwheels.hostedpi.com/simple
 
 ADD read_waveplus.py /app/
 
